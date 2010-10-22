@@ -74,6 +74,7 @@ class BlogCommentList(CassandraObjectList):
 # linguistics
 
 def word_extractor(text):
+    words = set()
     for chunk in re_text_chunks.finditer(text):
         text = chunk.group()
         while True:
@@ -81,7 +82,10 @@ def word_extractor(text):
             if not m:
                 break
             word, text = m.group(1, 2)
-            yield word.lower()
+            word = word.lower()
+            if word not in words:
+                words.add(word)
+                yield word
 
 # main module
 
