@@ -1,0 +1,32 @@
+#!/usr/bin/python2.6
+
+from mg import *
+from concurrence import dispatch, quit
+import logging
+
+def main():
+    try:
+        if len(sys.argv) < 2:
+            quit(1)
+            return
+        int_port = int(sys.argv[1])
+        inst = Instance("worker-%d" % int_port)
+        inst.dbpool = CassandraPool(hosts=(("director-db", 9160),), size=None)
+        inst.mcpool = MemcachedPool(host=("director-mc", 11211), size=None)
+        inst.config = {}
+        int_app = WebApplication(inst, "joyblog", "ext")
+        int_app.modules.load(["mg.core.cass_struct.CommonCassandraStruct", "mg.core.web.Web", "mg.core.cass_maintenance.CassandraMaintenance", "jb.Blog"])
+        int_app.dbrestruct()
+        int_daemon = WebDaemon(inst, int_app)
+        int_daemon.serve(("0.0.0.0", int_port))
+    except RuntimeError as e:
+        logging.error(e)
+        quit(1)
+    except (SystemExit, TaskletExit, KeyboardInterrupt):
+        raise
+    except BaseException as e:
+        logging.exception(e)
+        quit(1)
+
+dispatch(main)
+
