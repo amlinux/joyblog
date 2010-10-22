@@ -1,0 +1,9 @@
+<script type="text/javascript" src="/st/[%ver%]/blog-comments.js"></script>
+<script type="text/javascript">post_id='[%post_uuid%]';</script>
+===HEAD===
+<h1>[%post.title_html%]</h1>
+<div class="post-created">[%post.created%]</div>
+<div class="post-content">[%post_content.body_html%]</div>
+<div class="post-tags">Теги: [%post_content.tags_html%]</div>
+<div class="post-comments">[%foreach com in comments%][%if com.b%]<div class="c">[%end%][%if com.e%]</div>[%end%][%if com.d%]<a name="[%com.c%]"></a>[%com.d.body_html%] <a id="reply-link[%com.c%]" href="javascript:void(0)" onclick="return reply('[%com.c%]')">ответить</a>[%end%][%end%]</div>
+<a id="reply-link" href="javascript:void(0)" onclick="return reply('')">Комментировать</a>
