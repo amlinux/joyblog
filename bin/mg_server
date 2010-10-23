@@ -1,0 +1,24 @@
+#!/usr/bin/python2.6
+
+from mg import *
+from concurrence import dispatch, quit
+import logging
+
+def main():
+    try:
+        inst = Instance("server")
+        inst.download_config()
+        app = WebApplication(inst, "int", "int")
+        app.modules.load(["mg.core.server.Server"])
+        app.hooks.call("server.run")
+    except (SystemExit, TaskletExit, KeyboardInterrupt):
+        raise
+    except RuntimeError as e:
+        logging.error(e)
+        quit(1)
+    except BaseException as e:
+        logging.exception(e)
+        quit(1)
+
+dispatch(main)
+
