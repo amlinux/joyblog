@@ -8,6 +8,10 @@ import re
 import cgi
 import time
 
+max_word_len = 30
+max_tag_len = 30
+max_inline_chunk_len = 10000
+
 posts_per_page = 10
 
 alphabet = "abcdefghijklmnopqrstuvwxyz"
@@ -17,8 +21,10 @@ re_split_tags = re.compile(r'\s*(,\s*)+')
 re_url_comments = re.compile(r'^([a-f0-9]+)/comments$')
 re_extract_uuid = re.compile(r'^.*//([a-f0-9]+)$')
 re_wildcard = re.compile(r'^(.*)(.)\*$')
-re_word = re.compile(r'^.*?(\w{3,})(.*)', re.UNICODE)
-re_text_chunks = re.compile(r'.{10000,}?\S*|.+', re.DOTALL)
+delimiters = r'\s\.,\-\!\&\(\)\'"\:;\<\>\/\?\`\|'
+re_word_symbol = re.compile(r'[^%s]' % delimiters)
+re_not_word_symbol = re.compile(r'[%s]' % delimiters)
+re_text_chunks = re.compile(r'.{1000,}?\S*|.+', re.DOTALL)
 re_split_chunks = re.compile('(###INCLUDE:.+?###)')
 re_include = re.compile(r'###INCLUDE:(.*):(\d+)###')
 
@@ -84,11 +90,18 @@ def word_extractor(text):
     for chunk in re_text_chunks.finditer(text):
         text = chunk.group()
         while True:
-            m = re_word.match(text)
+            m = re_word_symbol.search(text)
             if not m:
                 break
-            word, text = m.group(1, 2)
-            yield word.lower()
+            start = m.start()
+            m = re_not_word_symbol.search(text, start)
+            if m:
+                end = m.end()
+                yield text[start:end-1].lower()
+                text = text[end:]
+            else:
+                yield text.lower()
+                break
 
 # deferred chunks
 
@@ -155,6 +168,7 @@ class Blog(Module):
             tags = set()
             for i in range(0, len(raw_tags)):
                 if i % 2 == 0:
+                    tag = raw_tags[i]
                     tags.add(raw_tags[i].lower())
             self.debug("creating data objects...")
             post = self.obj(BlogPost)
@@ -175,8 +189,11 @@ class Blog(Module):
             mutations_tagged_posts = []
             clock = Clock(time.time() * 1000)
             for tag in tags:
-                mutations_tags.append(Mutation(ColumnOrSuperColumn(Column(name=tag.encode("utf-8"), value="1", clock=clock))))
-                mutations_tagged_posts.append(Mutation(ColumnOrSuperColumn(Column(name="%s//%s" % (tag.encode("utf-8"), post.uuid), value="1", clock=clock))))
+                tag_short = tag
+                if len(tag_short) > max_tag_len:
+                    tag_short = tag_short[0:max_tag_len]
+                mutations_tags.append(Mutation(ColumnOrSuperColumn(Column(name=tag_short.encode("utf-8"), value=tag.encode("utf-8"), clock=clock))))
+                mutations_tagged_posts.append(Mutation(ColumnOrSuperColumn(Column(name="%s//%s" % (tag_short.encode("utf-8"), post.uuid), value="1", clock=clock))))
             app_tag = self.app().tag
             mutations = {}
             if len(mutations_tags):
@@ -248,7 +265,6 @@ class Blog(Module):
                 response.append(DownloadChunk(url, length))
             else:
                 response.append(chunk)
-        print "sending response %s" % ["%s (%d)" % (type(s), len(s)) for s in response]
         req.headers.append(("Content-type", "text/html; charset=utf-8"))
         req.start_response("200 OK", req.headers)
         return response
@@ -259,9 +275,11 @@ class Blog(Module):
         clock = Clock(time.time() * 1000)
         app_tag = self.app().tag
         for word in words:
+            if len(word) > max_word_len:
+                word = word[0:max_word_len]
             if not word in stored:
                 stored.add(word)
-                mutations_search.append(Mutation(ColumnOrSuperColumn(Column(name="%s//%s" % (word.encode("utf-8"), post_uuid), value="1", clock=clock))))
+                mutations_search.append(Mutation(ColumnOrSuperColumn(Column(name=(u"%s//%s" % (word, post_uuid)).encode("utf-8"), value="1", clock=clock))))
                 if len(mutations_search) >= 1000:
                     mutations = {"%s-BlogSearch" % app_tag: {"Objects": mutations_search}}
                     self.app().db.batch_mutate(mutations, ConsistencyLevel.QUORUM)
@@ -348,7 +366,7 @@ class Blog(Module):
     def ext_tags(self):
         app_tag = self.app().tag
         tags = self.app().db.get_slice("%s-BlogTags" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange("", "")), ConsistencyLevel.QUORUM)
-        tags = [cgi.escape(tag.column.name) for tag in tags]
+        tags = [cgi.escape(tag.column.value) for tag in tags]
         vars = {
             "tags": tags
         }
@@ -357,7 +375,10 @@ class Blog(Module):
     def ext_tag(self):
         req = self.req()
         tag = req.args
-        tag_utf8 = tag.encode("utf-8")
+        tag_utf8 = tag
+        if len(tag_utf8) > max_tag_len:
+            tag_utf8 = tag_utf8[0:max_tag_len]
+        tag_utf8 = tag_utf8.encode("utf-8")
         app_tag = self.app().tag
         posts = self.app().db.get_slice("%s-BlogTaggedPosts" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange(tag_utf8 + "//", tag_utf8 + "/=")), ConsistencyLevel.QUORUM)
         render_posts = []
@@ -379,15 +400,18 @@ class Blog(Module):
         if req.environ.get("REQUEST_METHOD") == "POST":
             self.call("web.redirect", "/search/%s" % urlencode(req.param("query").lower()))
         query = req.args.lower().strip()
-        m = re_wildcard.match(query)
+        query_search = query
+        if len(query_search) > max_word_len:
+            query_search = query_search[0:max_word_len]
+        m = re_wildcard.match(query_search)
         if m:
             word, letter = m.group(1, 2)
             next_letter = unichr(ord(letter) + 1)
             start = (word + letter).encode("utf-8")
             finish = (word + next_letter).encode("utf-8")
         else:
-            start = (query + "//").encode("utf-8")
-            finish = (query + "/=").encode("utf-8")
+            start = (query_search + "//").encode("utf-8")
+            finish = (query_search + "/=").encode("utf-8")
         app_tag = self.app().tag
         posts = self.app().db.get_slice("%s-BlogSearch" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange(start, finish)), ConsistencyLevel.QUORUM)
         render_posts = set()
@@ -407,7 +431,7 @@ class Blog(Module):
     def upload_if_large(self, data):
         if type(data) == unicode:
             data = data.encode("utf-8")
-        if len(data) < 10000:
+        if len(data) < max_inline_chunk_len:
             return data
         url = str("/%s%s/%s" % (random.choice(alphabet), random.choice(alphabet), uuid4().hex))
         cnn = HTTPConnection()
