@@ -1,0 +1,30 @@
+#!/usr/bin/python2.6
+
+from concurrence import *
+from jb.attack import *
+import sys
+
+def create_posts(target, title, content, quantity):
+    for i in range(0, quantity):
+        create_post(target, title, content)
+
+def main():
+    try:
+        target = {
+            "host": sys.argv[1],
+            "errors": {},
+        }
+        #content = random_string(950000)
+        #title = random_string(950000)
+        title = " ".join([random_string(95) for i in range(0, 10000)])
+        #content = " ".join([random_string(950) for i in range(0, 100)])
+        tasklets = []
+        for i in range(0, 10):
+            tasklets.append(Tasklet.new(create_posts)(target, title, "Content %d", 10))
+        for tasklet in tasklets:
+            Tasklet.join(tasklet)
+        print "Errors: %s" % target["errors"]
+    finally:
+        quit()
+
+dispatch(main)
