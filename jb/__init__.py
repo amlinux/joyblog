@@ -1,6 +1,8 @@
 from mg import *
 from itertools import *
 from concurrence import Tasklet
+from concurrence.http import HTTPConnection, HTTPError, HTTPRequest
+from uuid import uuid4
 import jb
 import re
 import cgi
@@ -8,12 +10,17 @@ import time
 
 posts_per_page = 10
 
+alphabet = "abcdefghijklmnopqrstuvwxyz"
+storage_host = "storage"
+
 re_split_tags = re.compile(r'\s*(,\s*)+')
 re_url_comments = re.compile(r'^([a-f0-9]+)/comments$')
 re_extract_uuid = re.compile(r'^.*//([a-f0-9]+)$')
 re_wildcard = re.compile(r'^(.*)(.)\*$')
 re_word = re.compile(r'^.*?(\w{3,})(.*)', re.UNICODE)
 re_text_chunks = re.compile(r'.{10000,}?\S*|.+', re.DOTALL)
+re_split_chunks = re.compile('(###INCLUDE:.+?###)')
+re_include = re.compile(r'###INCLUDE:(.*):(\d+)###')
 
 # blog post
 
@@ -83,11 +90,38 @@ def word_extractor(text):
             word, text = m.group(1, 2)
             yield word.lower()
 
+# deferred chunks
+
+class DownloadChunk(object):
+    def __init__(self, url, len):
+        self.url = url
+        self.len = len
+
+    def __len__(self):
+        return self.len
+
+    def __str__(self):
+        cnn = HTTPConnection()
+        try:
+            cnn.connect((storage_host, 80))
+            try:
+                req = cnn.get(str(self.url))
+                res = cnn.perform(req)
+                if res.status_code == 200:
+                    return res.body
+            finally:
+                cnn.close()
+        except IOError:
+            pass
+        # degradation
+        return ""
+
 # main module
 
 class Blog(Module):
     def register(self):
         Module.register(self)
+        self.rdep(["mg.core.cass_struct.CommonCassandraStruct", "mg.core.web.Web", "mg.core.cass_maintenance.CassandraMaintenance"])
         self.rhook("core.template_path", self.template_path)
         self.rhook("ext-index.index", self.ext_posts)
         self.rhook("ext-posts.index", self.ext_posts)
@@ -102,10 +136,10 @@ class Blog(Module):
         paths.append(jb.__path__[0] + "/templates")
 
     def ext_posts(self):
-        self.posts(1)
+        return self.posts(1)
 
     def ext_posts_page(self):
-        self.posts(intz(self.req().args))
+        return self.posts(intz(self.req().args))
 
     def posts(self, page):
         req = self.req()
@@ -127,9 +161,9 @@ class Blog(Module):
             post_content = self.obj(BlogPostContent, post.uuid, data={})
             post.set("created", self.now())
             # storing html encoded values
-            post.set("title_html", cgi.escape(title))
-            post_content.set("body_html", cgi.escape(body))
-            post_content.set("tags_html", ", ".join(['<a href="/tags/%s">%s</a>' % (cgi.escape(urlencode(tag)), cgi.escape(tag)) for tag in tags]))
+            post.set("title_html", self.upload_if_large(cgi.escape(title)))
+            post_content.set("body_html", self.upload_if_large(cgi.escape(body)))
+            post_content.set("tags_html", self.upload_if_large(", ".join(['<a href="/tags/%s">%s</a>' % (cgi.escape(urlencode(tag)), cgi.escape(tag)) for tag in tags])))
             # storing raw values
             if False:
                 post.set("title", title)
@@ -160,7 +194,7 @@ class Blog(Module):
             word_stat = word_stat.items()
             word_stat.sort(key=itemgetter(0))
             word_stat.sort(key=itemgetter(1), reverse=True)
-            post_content.set("words", word_stat)
+            post_content.set("words_html", self.upload_if_large(''.join(["<tr><td>%s</td><td>%s</td></tr>" % (ent[0], ent[1]) for ent in word_stat])))
             self.debug("storing post...")
             post.store()
             post_content.store()
@@ -197,7 +231,27 @@ class Blog(Module):
                     pages_list.append({"entry": {"text": "..."}})
                 last_show = show
             vars["pages"] = pages_list
-        self.call("web.response_template", "joyblog/posts.html", vars)
+        return self.chunked_template("joyblog/posts.html", vars, posts=posts)
+
+    def chunked_template(self, template, vars, posts=None):
+        req = self.req()
+        vars["content"] = self.call("web.parse_template", template, vars)
+        content = self.call("web.parse_template", "joyblog/global.html", vars)
+        # creating chunked response
+        chunks = re_split_chunks.split(content)
+        response = []
+        for chunk in chunks:
+            m = re_include.match(chunk)
+            if m:
+                url, length = m.group(1, 2)
+                length = int(length)
+                response.append(DownloadChunk(url, length))
+            else:
+                response.append(chunk)
+        print "sending response %s" % ["%s (%d)" % (type(s), len(s)) for s in response]
+        req.headers.append(("Content-type", "text/html; charset=utf-8"))
+        req.start_response("200 OK", req.headers)
+        return response
 
     def update_fulltext(self, post_uuid, words):
         stored = set()
@@ -234,7 +288,7 @@ class Blog(Module):
             comment = self.obj(BlogComment)
             comment.set("created", self.now())
             comment.set("post", post.uuid)
-            comment.set("body_html", cgi.escape(body))
+            comment.set("body_html", self.upload_if_large(cgi.escape(body)))
             parent = req.param("parent_id")
             if parent and len(parent) == 32:
                 comment.set("parent", parent)
@@ -281,7 +335,7 @@ class Blog(Module):
         comments = []
         self.render_comments(comments, render_comments)
         vars["comments"] = comments
-        self.call("web.response_template", "joyblog/post.html", vars)
+        return self.chunked_template("joyblog/post.html", vars)
 
     def render_comments(self, result, comments):
         for comment in comments:
@@ -298,7 +352,7 @@ class Blog(Module):
         vars = {
             "tags": tags
         }
-        self.call("web.response_template", "joyblog/tags.html", vars)
+        return self.chunked_template("joyblog/tags.html", vars)
 
     def ext_tag(self):
         req = self.req()
@@ -318,7 +372,7 @@ class Blog(Module):
             "tag": cgi.escape(tag),
             "posts": render_posts.data(),
         }
-        self.call("web.response_template", "joyblog/tag.html", vars)
+        return self.chunked_template("joyblog/tag.html", vars)
 
     def ext_search(self):
         req = self.req()
@@ -348,4 +402,30 @@ class Blog(Module):
             "query": cgi.escape(query),
             "posts": render_posts.data(),
         }
-        self.call("web.response_template", "joyblog/search.html", vars)
+        return self.chunked_template("joyblog/search.html", vars)
+
+    def upload_if_large(self, data):
+        if type(data) == unicode:
+            data = data.encode("utf-8")
+        if len(data) < 10000:
+            return data
+        url = str("/%s%s/%s" % (random.choice(alphabet), random.choice(alphabet), uuid4().hex))
+        cnn = HTTPConnection()
+        try:
+            cnn.connect((storage_host, 80))
+            try:
+                request = HTTPRequest()
+                request.method = "PUT"
+                request.path = url
+                request.host = storage_host
+                request.body = data
+                request.add_header("Content-type", "application/octet-stream")
+                request.add_header("Content-length", len(data))
+                response = cnn.perform(request)
+                if response.status_code != 201:
+                    raise RuntimeError("Error storing object: %s" % response.status)
+                return "###INCLUDE:%s:%d###" % (url, len(data))
+            finally:
+                cnn.close()
+        except IOError as e:
+            self.exception(e)
