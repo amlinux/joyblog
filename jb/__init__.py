@@ -13,7 +13,7 @@ re_url_comments = re.compile(r'^([a-f0-9]+)/comments$')
 re_extract_uuid = re.compile(r'^.*//([a-f0-9]+)$')
 re_wildcard = re.compile(r'^(.*)(.)\*$')
 re_word = re.compile(r'^.*?(\w{3,})(.*)', re.UNICODE)
-re_text_chunks = re.compile(r'.{10000,}?\S*', re.DOTALL)
+re_text_chunks = re.compile(r'.{10000,}?\S*|.+', re.DOTALL)
 
 # blog post
 
@@ -74,7 +74,6 @@ class BlogCommentList(CassandraObjectList):
 # linguistics
 
 def word_extractor(text):
-    words = set()
     for chunk in re_text_chunks.finditer(text):
         text = chunk.group()
         while True:
@@ -82,10 +81,7 @@ def word_extractor(text):
             if not m:
                 break
             word, text = m.group(1, 2)
-            word = word.lower()
-            if word not in words:
-                words.add(word)
-                yield word
+            yield word.lower()
 
 # main module
 
@@ -133,7 +129,7 @@ class Blog(Module):
             # storing html encoded values
             post.set("title_html", cgi.escape(title))
             post_content.set("body_html", cgi.escape(body))
-            post_content.set("tags_html", ", ".join(['<a href="/tags/%s">%s</a>' % (tag, tag) for tag in [cgi.escape(tag) for tag in tags]]))
+            post_content.set("tags_html", ", ".join(['<a href="/tags/%s">%s</a>' % (cgi.escape(urlencode(tag)), cgi.escape(tag)) for tag in tags]))
             # storing raw values
             if False:
                 post.set("title", title)
@@ -153,12 +149,23 @@ class Blog(Module):
                 mutations["%s-BlogTags" % app_tag] = {"Objects": mutations_tags}
                 mutations["%s-BlogTaggedPosts" % app_tag] = {"Objects": mutations_tagged_posts}
             self.app().db.batch_mutate(mutations, ConsistencyLevel.QUORUM)
+            self.debug("calculating words...")
+            words = list(chain(word_extractor(title), word_extractor(body)))
+            word_stat = {}
+            for word in words:
+                try:
+                    word_stat[word] += 1
+                except KeyError:
+                    word_stat[word] = 1
+            word_stat = word_stat.items()
+            word_stat.sort(key=itemgetter(0))
+            word_stat.sort(key=itemgetter(1), reverse=True)
+            post_content.set("words", word_stat)
             self.debug("storing post...")
             post.store()
             post_content.store()
             self.debug("creating fulltext index...")
             # deferring fulltext index
-            words = chain(word_extractor(title), word_extractor(body))
             self.update_fulltext(post.uuid, words)
             self.call("web.redirect", "/posts/%s" % post.uuid)
         # loading posts
@@ -193,15 +200,18 @@ class Blog(Module):
         self.call("web.response_template", "joyblog/posts.html", vars)
 
     def update_fulltext(self, post_uuid, words):
+        stored = set()
         mutations_search = []
         clock = Clock(time.time() * 1000)
         app_tag = self.app().tag
         for word in words:
-            mutations_search.append(Mutation(ColumnOrSuperColumn(Column(name="%s//%s" % (word.encode("utf-8"), post_uuid), value="1", clock=clock))))
-            if len(mutations_search) >= 1000:
-                mutations = {"%s-BlogSearch" % app_tag: {"Objects": mutations_search}}
-                self.app().db.batch_mutate(mutations, ConsistencyLevel.QUORUM)
-                mutations_search = []
+            if not word in stored:
+                stored.add(word)
+                mutations_search.append(Mutation(ColumnOrSuperColumn(Column(name="%s//%s" % (word.encode("utf-8"), post_uuid), value="1", clock=clock))))
+                if len(mutations_search) >= 1000:
+                    mutations = {"%s-BlogSearch" % app_tag: {"Objects": mutations_search}}
+                    self.app().db.batch_mutate(mutations, ConsistencyLevel.QUORUM)
+                    mutations_search = []
         if len(mutations_search):
             mutations = {"%s-BlogSearch" % app_tag: {"Objects": mutations_search}}
             self.app().db.batch_mutate(mutations, ConsistencyLevel.QUORUM)
