@@ -72,7 +72,7 @@ log.addHandler(ch)
 
 # getting instance id
 inst = my_instance_id()
-next_scale = 0
+next_scale = time.time() + 30
 
 if re.match("DB", sys.argv[1]):
     cpu_threshold_low = 0.05
@@ -121,6 +121,11 @@ while True:
             # preparing log message
             scale_up.extend(scale_down)
             log.info("%s: scaling %d => %d", ", ".join(scale_up), slots, target_slots)
-            resize_instance(inst, target_slots)
+            try:
+                resize_instance(inst, target_slots)
+            except (TaskletExit, SystemExit, KeyboardInterrupt):
+                raise
+            except BaseException as e:
+                log.exception(e)
             next_scale = time.time() + 10
     time.sleep(3)

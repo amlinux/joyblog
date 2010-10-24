@@ -19,7 +19,7 @@ posts_per_page = 10
 alphabet = "abcdefghijklmnopqrstuvwxyz"
 
 re_split_tags = re.compile(r'\s*(,\s*)+')
-re_url_comments = re.compile(r'^([a-f0-9]+)/comments$')
+re_post_command = re.compile(r'^([a-f0-9]+)/(comments|words)$')
 re_extract_uuid = re.compile(r'^.*//([a-f0-9]+)$')
 re_wildcard = re.compile(r'^(.*)(.)\*$')
 delimiters = r'\s\.,\-\!\&\(\)\'"\:;\<\>\/\?\`\|»\—«'
@@ -164,11 +164,13 @@ class Blog(Module):
             mutations_tags = []
             clock = Clock(time.time() * 1000)
             app_tag = self.app().tag
+            tags_short = []
             for tag in tags:
                 tag_short = tag
                 if len(tag_short) > max_tag_len:
                     tag_short = tag_short[0:max_tag_len]
                 tag_short = tag_short.encode("utf-8")
+                tags_short.append(tag_short)
                 mutations_tags.append(Mutation(ColumnOrSuperColumn(Column(name=tag_short, value=self.upload_if_large(cgi.escape(tag)), clock=clock))))
                 mutations["%s-BlogTaggedPosts-%s" % (app_tag, tag_short)] = {"Objects": [Mutation(ColumnOrSuperColumn(Column(name=post.uuid, value="1", clock=clock)))]}
             if len(mutations_tags):
@@ -190,6 +192,9 @@ class Blog(Module):
             post_content.store()
             # deferring fulltext index
             self.update_fulltext(post.uuid, words)
+            self.app().mc.delete("page/tags", 4)
+            for tag in tags_short:
+                self.app().mc.delete("page/tags/%s" % tag, 4)
             self.call("web.redirect", "/posts/%s" % post.uuid)
         # loading posts
         posts = self.objlist(BlogPostList, query_index="created", query_reversed=True)
@@ -220,7 +225,7 @@ class Blog(Module):
                     pages_list.append({"entry": {"text": "..."}})
                 last_show = show
             vars["pages"] = pages_list
-        return self.call("web.response_template", "joyblog/posts.html", vars)
+        self.call("web.response_template", "joyblog/posts.html", vars)
 
     def update_fulltext(self, post_uuid, words):
         stored = set()
@@ -244,15 +249,17 @@ class Blog(Module):
     def ext_post(self):
         req = self.req()
         post_id = req.args
-        comment = re_url_comments.match(req.args)
-        if comment:
-            post_id = comment.groups(1)[0]
+        m = re_post_command.match(req.args)
+        if m:
+            post_id, cmd = m.group(1, 2)
+        else:
+            cmd = None
         try:
             post = self.obj(BlogPost, post_id)
             post_content = self.obj(BlogPostContent, post_id)
         except ObjectNotFoundException:
             self.call("web.not_found")
-        if comment and req.environ.get("REQUEST_METHOD") == "POST":
+        if cmd == "comments" and req.environ.get("REQUEST_METHOD") == "POST":
             body = req.param("body").strip()
             if body == "":
                 self.call("web.redirect", "/posts/%s" % post.uuid)
@@ -267,7 +274,14 @@ class Blog(Module):
             # deferring fulltext index
             words = word_extractor(body)
             self.update_fulltext(post.uuid, words)
+            self.app().mc.delete("page/posts/%s" % post.uuid, 4)
             self.call("web.redirect", "/posts/%s#%s" % (post.uuid, comment.uuid))
+        elif cmd == "words":
+            vars = {
+                "post_content": post_content.data,
+            }
+            self.call("web.cache")
+            self.call("web.response_template", "joyblog/words.html", vars)
         vars = {
             "post_uuid": post.uuid,
             "post": post.data,
@@ -306,7 +320,8 @@ class Blog(Module):
         comments = []
         self.render_comments(comments, render_comments)
         vars["comments"] = comments
-        return self.call("web.response_template", "joyblog/post.html", vars)
+        self.call("web.cache")
+        self.call("web.response_template", "joyblog/post.html", vars)
 
     def render_comments(self, result, comments):
         for comment in comments:
@@ -323,7 +338,8 @@ class Blog(Module):
         vars = {
             "tags": tags
         }
-        return self.call("web.response_template", "joyblog/tags.html", vars)
+        self.call("web.cache")
+        self.call("web.response_template", "joyblog/tags.html", vars)
 
     def ext_tag(self):
         req = self.req()
@@ -341,7 +357,8 @@ class Blog(Module):
             "tag": cgi.escape(tag),
             "posts": render_posts.data(),
         }
-        return self.call("web.response_template", "joyblog/tag.html", vars)
+        self.call("web.cache")
+        self.call("web.response_template", "joyblog/tag.html", vars)
 
     def ext_search(self):
         req = self.req()
@@ -374,7 +391,7 @@ class Blog(Module):
             "query": cgi.escape(query),
             "posts": render_posts.data(),
         }
-        return self.call("web.response_template", "joyblog/search.html", vars)
+        self.call("web.response_template", "joyblog/search.html", vars)
 
     def upload_if_large(self, data):
         if type(data) == unicode:
