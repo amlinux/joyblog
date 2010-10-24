@@ -1,0 +1,80 @@
+#!/usr/bin/python2.6
+
+from httplib import HTTPSConnection
+import json
+import sys
+import re
+import time
+
+def scalaxy_api_request(url):
+    cnn = HTTPSConnection("www.scalaxy.ru")
+    cnn.request("GET", url, headers={"Authorization": "Basic YW1sQHJ1bGV6ei5ydTp2c2VtcGl6ZGVj"})
+    res = cnn.getresponse()
+    data = res.read()
+    if res.status != 200:
+        raise RuntimeError("%s: %d %s" % (url, res.status, res.reason))
+    return json.loads(data)
+
+def my_instance_id():
+    for inst in scalaxy_api_request("/api/projects/912/instances.json"):
+        if inst["name"] == sys.argv[1]:
+            return inst["id"]
+    raise RuntimeError("Instance %s not found" % sys.argv[1])
+
+def memstat():
+    memstat = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            m = re.match(r'(\S+):\s*(\d+) kB$', line.strip())
+            if m:
+                key, val = m.group(1, 2)
+                memstat[key] = int(val)
+    memstat["Used"] = memstat.get("MemTotal", 0) - memstat.get("MemFree", 0) - memstat.get("Buffers", 0) - memstat.get("Cached", 0) - memstat.get("SwapCached", 0)
+    return memstat
+
+def cpuusage():
+    with open("/proc/stat") as f:
+        line = f.next().strip()
+        values = map(int, line.split()[1:5])
+        return (values[0] + values[1] + values[2], values[0] + values[1] + values[2] + values[3])
+
+inst = my_instance_id()
+next_scale = 0
+
+while True:
+    scale_up = []
+    scale_down = []
+    # memory
+    stat = memstat()
+    if stat["Used"] > 0.8 * stat["MemTotal"]:
+        scale_up.append("memory usage > 80%")
+    elif stat["Used"] < 0.5 * stat["MemTotal"]:
+        scale_down.append("memory usage < 50%")
+    # CPU
+    stat = cpuusage()
+    if stat[0] > 0.8 * stat[1]:
+        scale_up.append("cpu usage > 80%")
+    elif stat[0] < 0.5 * stat[1]:
+        scale_down.append("cpu usage < 50%")
+    # scaling solution
+    if len(scale_up):
+        scale_down = []
+    if (len(scale_up) or (scale_down)) and time.time() >= next_scale:
+        info = scalaxy_api_request("/api/projects/912/instances/%s.json" % inst)
+        slots = info["slots"]
+        if len(scale_up):
+            target_slots = slots + 4
+        else:
+            target_slots = slots - 1
+        if target_slots > info["max_slots"]:
+            target_slots = info["max_slots"]
+        if target_slots < info["min_slots"]:
+            target_slots = info["min_slots"]
+        if target_slots < 1:
+            target_slots = 1
+        if target_slots != slots:
+            # preparing log message
+            scale_up.extend(scale_down)
+            print "%s: scaling %d => %d" % (", ".join(scale_up), slots, target_slots)
+            next_scale = time.time() + 10
+    time.sleep(3)
