@@ -5,10 +5,17 @@ import json
 import sys
 import re
 import time
+import logging
+import logging.handlers
 
-def scalaxy_api_request(url):
+last_cpuusage = []
+
+def scalaxy_api_request(method, url, body=None, headers=None):
     cnn = HTTPSConnection("www.scalaxy.ru")
-    cnn.request("GET", url, headers={"Authorization": "Basic YW1sQHJ1bGV6ei5ydTp2c2VtcGl6ZGVj"})
+    if headers is None:
+        headers = {}
+    headers["Authorization"] = "Basic YW1sQHJ1bGV6ei5ydTp2c2VtcGl6ZGVj"
+    cnn.request(method, url, body, headers)
     res = cnn.getresponse()
     data = res.read()
     if res.status != 200:
@@ -16,10 +23,13 @@ def scalaxy_api_request(url):
     return json.loads(data)
 
 def my_instance_id():
-    for inst in scalaxy_api_request("/api/projects/912/instances.json"):
+    for inst in scalaxy_api_request("GET", "/api/projects/912/instances.json"):
         if inst["name"] == sys.argv[1]:
             return inst["id"]
     raise RuntimeError("Instance %s not found" % sys.argv[1])
+
+def resize_instance(id, slots):
+    scalaxy_api_request("PUT", "/api/projects/912/instances/%s/resize.json" % id, body="{slots: %d}" % slots, headers={"Content-type": "application/json"})
 
 def memstat():
     memstat = {}
@@ -32,12 +42,32 @@ def memstat():
     memstat["Used"] = memstat.get("MemTotal", 0) - memstat.get("MemFree", 0) - memstat.get("Buffers", 0) - memstat.get("Cached", 0) - memstat.get("SwapCached", 0)
     return memstat
 
-def cpuusage():
+def cpuusage(last_cpuusage):
     with open("/proc/stat") as f:
         line = f.next().strip()
-        values = map(int, line.split()[1:5])
-        return (values[0] + values[1] + values[2], values[0] + values[1] + values[2] + values[3])
+        values = map(int, line.split()[1:])
+	diff = None
+	try:
+		diff = [values[i] - last_cpuusage[i] for i in range(len(values))]
+	except IndexError:
+		pass
+	last_cpuusage[:] = values
+	if not diff:
+		return None
+	sum = 0
+	for val in diff:
+		sum += val
+        return (sum - diff[3], sum)
+cpuusage(last_cpuusage)
 
+# logging
+log = logging.getLogger("")
+log.setLevel(logging.DEBUG)
+ch = logging.handlers.SysLogHandler(address="/dev/log")
+ch.setLevel(logging.DEBUG)
+log.addHandler(ch)
+
+# getting instance id
 inst = my_instance_id()
 next_scale = 0
 
@@ -54,7 +84,7 @@ while True:
     else:
         dont_scale_down = True
     # CPU
-    stat = cpuusage()
+    stat = cpuusage(last_cpuusage)
     if stat[0] > 0.8 * stat[1]:
         scale_up.append("cpu usage > 80%")
     elif stat[0] < 0.5 * stat[1]:
@@ -65,7 +95,7 @@ while True:
     if len(scale_up) or dont_scale_down:
         scale_down = []
     if (len(scale_up) or (scale_down)) and time.time() >= next_scale:
-        info = scalaxy_api_request("/api/projects/912/instances/%s.json" % inst)
+        info = scalaxy_api_request("GET", "/api/projects/912/instances/%s.json" % inst)
         slots = info["slots"]
         if len(scale_up):
             target_slots = slots + 4
@@ -80,6 +110,7 @@ while True:
         if target_slots != slots:
             # preparing log message
             scale_up.extend(scale_down)
-            print "%s: scaling %d => %d" % (", ".join(scale_up), slots, target_slots)
+            log.info("%s: scaling %d => %d", ", ".join(scale_up), slots, target_slots)
+            resize_instance(inst, target_slots)
             next_scale = time.time() + 10
     time.sleep(3)
