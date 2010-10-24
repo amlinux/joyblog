@@ -44,20 +44,25 @@ next_scale = 0
 while True:
     scale_up = []
     scale_down = []
+    dont_scale_down = False
     # memory
     stat = memstat()
     if stat["Used"] > 0.8 * stat["MemTotal"]:
         scale_up.append("memory usage > 80%")
     elif stat["Used"] < 0.5 * stat["MemTotal"]:
         scale_down.append("memory usage < 50%")
+    else:
+        dont_scale_down = True
     # CPU
     stat = cpuusage()
     if stat[0] > 0.8 * stat[1]:
         scale_up.append("cpu usage > 80%")
     elif stat[0] < 0.5 * stat[1]:
         scale_down.append("cpu usage < 50%")
+    else:
+        dont_scale_down = True
     # scaling solution
-    if len(scale_up):
+    if len(scale_up) or dont_scale_down:
         scale_down = []
     if (len(scale_up) or (scale_down)) and time.time() >= next_scale:
         info = scalaxy_api_request("/api/projects/912/instances/%s.json" % inst)
