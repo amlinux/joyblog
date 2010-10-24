@@ -7,3 +7,4 @@ export PYTHONPATH=/home/mg:/home/joyblog
 cd /home/joyblog
 
 screen -D -S dir -m bin/mg_director
+sleep 2

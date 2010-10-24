@@ -17,18 +17,15 @@ deploy:
 	rm -rf depl/mg/mg/admin depl/mg/mg/constructor depl/mg/mg/data depl/mg/mg/mmo depl/mg/mg/socio `ls -d depl/mg/mg/templates/* | grep -v director` depl/mg/mg/test
 	find depl \( -name '*.py' -or -name '.hg*' -or -name '*.po' -or -name '*.pot' \) -exec rm -rf {} \;
 	rsync -r depl/* joyblog:/home/
-	for server in Backend1 DB1 DB2 DDoS ; do ssh joyblog "cd /home;rsync -r --exclude=storage mg joyblog $$server:/home/" ; done
-	ssh joyblog "ssh Backend1 'killall mg_worker'"
+	for server in Backend1 Backend2 DB1 DB2 DDoS ; do ssh joyblog "cd /home;rsync -r --exclude=storage mg joyblog $$server:/home/" ; done
+	for server in Backend1 Backend2 ; do ssh joyblog "ssh $$server 'killall mg_worker'" ; done
 
 database-cleanup:
-	ssh joyblog "ssh DB1 'sudo /etc/init.d/cassandra stop ; sleep 1 ; sudo rm -rf /var/lib/cassandra/data /var/lib/cassandra/commitlog'"
-	ssh joyblog "ssh DB2 'sudo /etc/init.d/cassandra stop ; sleep 1 ; sudo rm -rf /var/lib/cassandra/data /var/lib/cassandra/commitlog'"
-	ssh joyblog "sudo /etc/init.d/memcached stop ; sudo killall -KILL memcached ; sudo /etc/init.d/memcached start ; killall -KILL mg_director mg_server"
-	ssh joyblog "ssh Backend1 'killall -KILL mg_worker mg_server'"
-	ssh joyblog "ssh DB1 'sudo /etc/init.d/cassandra start'"
-	ssh joyblog "ssh DB2 'sudo /etc/init.d/cassandra start'"
+	for server in DB1 DB2 ; do ssh joyblog "ssh $$server 'sudo /etc/init.d/cassandra stop'" ; done
+	for server in DB1 DB2 ; do ssh joyblog "ssh $$server 'sudo rm -rf /var/lib/cassandra/data /var/lib/cassandra/commitlog'" ; done
+	for server in Backend1 Backend2 ; do ssh joyblog "ssh $$server 'killall -KILL mg_worker mg_server'" ; done
+	ssh joyblog "killall -KILL mg_director mg_server ; sudo /etc/init.d/memcached stop ; sudo killall -KILL memcached ; sudo /etc/init.d/memcached start"
+	for server in DB1 DB2 ; do ssh joyblog "ssh $$server 'sudo /etc/init.d/cassandra start'" ; done
 	ssh joyblog "sudo killall -HUP init ; sleep 3 ; sudo killall -HUP init"
-	ssh joyblog "ssh Backend1 'sudo killall -HUP init'"
-	ssh joyblog "sudo rm -rf /home/joyblog/static/storage/storage"
-	ssh joyblog "sudo rm /var/log/syslog ; sudo rm /var/log/user.log ; sudo /etc/init.d/rsyslog restart"
-	ssh joyblog "killall mg_director"
+	for server in Backend1 Backend2 ; do ssh joyblog "ssh $$server 'sudo killall -HUP init'" ; done
+	ssh joyblog "sudo rm -rf /home/joyblog/static/storage/storage /var/log/syslog /var/log/user.log ; sudo /etc/init.d/rsyslog restart ; killall mg_director"

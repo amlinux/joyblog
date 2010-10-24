@@ -6,4 +6,5 @@ export PYTHONPATH=/home/mg:/home/joyblog
 
 cd /home/joyblog
 
-screen -D -S server -m bin/mg_server -b 4
+screen -D -S server -m bin/mg_server -b 6
+sleep 2
