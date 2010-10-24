@@ -9,6 +9,7 @@ import jb
 import re
 import cgi
 import time
+import random
 
 max_word_len = 30
 max_tag_len = 30
@@ -192,9 +193,9 @@ class Blog(Module):
             post_content.store()
             # deferring fulltext index
             self.update_fulltext(post.uuid, words)
-            self.app().mc.delete("page/tags", 4)
+            self.call("web.cache_invalidate", "/tags")
             for tag in tags_short:
-                self.app().mc.delete("page/tags/%s" % tag, 4)
+                self.call("web.cache_invalidate", "/tags/%s" % tag)
             self.call("web.redirect", "/posts/%s" % post.uuid)
         # loading posts
         posts = self.objlist(BlogPostList, query_index="created", query_reversed=True)
@@ -248,6 +249,8 @@ class Blog(Module):
 
     def ext_post(self):
         req = self.req()
+        if req.environ.get("REQUEST_METHOD") == "GET":
+            self.call("web.cache")
         post_id = req.args
         m = re_post_command.match(req.args)
         if m:
@@ -274,13 +277,12 @@ class Blog(Module):
             # deferring fulltext index
             words = word_extractor(body)
             self.update_fulltext(post.uuid, words)
-            self.app().mc.delete("page/posts/%s" % post.uuid, 4)
+            self.call("web.cache_invalidate", "/posts/%s" % post.uuid)
             self.call("web.redirect", "/posts/%s#%s" % (post.uuid, comment.uuid))
         elif cmd == "words":
             vars = {
                 "post_content": post_content.data,
             }
-            self.call("web.cache")
             self.call("web.response_template", "joyblog/words.html", vars)
         vars = {
             "post_uuid": post.uuid,
@@ -320,7 +322,6 @@ class Blog(Module):
         comments = []
         self.render_comments(comments, render_comments)
         vars["comments"] = comments
-        self.call("web.cache")
         self.call("web.response_template", "joyblog/post.html", vars)
 
     def render_comments(self, result, comments):
@@ -332,16 +333,17 @@ class Blog(Module):
             result.append({"e": True})
 
     def ext_tags(self):
+        self.call("web.cache")
         app_tag = self.app().tag
         tags = self.app().db.get_slice("%s-BlogTags" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange("", "", count=10000000)), ConsistencyLevel.QUORUM)
         tags = [tag.column.value for tag in tags]
         vars = {
             "tags": tags
         }
-        self.call("web.cache")
         self.call("web.response_template", "joyblog/tags.html", vars)
 
     def ext_tag(self):
+        self.call("web.cache")
         req = self.req()
         tag = req.args
         tag_utf8 = tag
@@ -357,7 +359,6 @@ class Blog(Module):
             "tag": cgi.escape(tag),
             "posts": render_posts.data(),
         }
-        self.call("web.cache")
         self.call("web.response_template", "joyblog/tag.html", vars)
 
     def ext_search(self):
