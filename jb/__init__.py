@@ -334,12 +334,7 @@ class Blog(Module):
         tag_utf8 = tag_utf8.encode("utf-8")
         app_tag = self.app().tag
         posts = self.app().db.get_slice("%s-BlogTaggedPosts-%s" % (app_tag, tag_utf8), ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange("", "", count=10000000)), ConsistencyLevel.QUORUM)
-        render_posts = []
-        for post in posts:
-            m = re_extract_uuid.match(post.column.name)
-            if m:
-                uuid = m.groups(1)[0]
-                render_posts.append(uuid)
+        render_posts = [post.column.name for post in posts]
         render_posts = self.objlist(BlogPostList, render_posts)
         render_posts.load(silent=True)
         vars = {
