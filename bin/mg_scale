@@ -19,7 +19,7 @@ def scalaxy_api_request(method, url, body=None, headers=None):
     res = cnn.getresponse()
     data = res.read()
     if res.status != 200:
-        raise RuntimeError("%s: %d %s" % (url, res.status, res.reason))
+        raise RuntimeError("%s: %d %s" % (url, res.status, data))
     return json.loads(data)
 
 def my_instance_id():
@@ -66,10 +66,20 @@ log.setLevel(logging.DEBUG)
 ch = logging.handlers.SysLogHandler(address="/dev/log")
 ch.setLevel(logging.DEBUG)
 log.addHandler(ch)
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+log.addHandler(ch)
 
 # getting instance id
 inst = my_instance_id()
 next_scale = 0
+
+if re.match("DB", sys.argv[1]):
+    cpu_threshold_low = 0.05
+    cpu_threshold_high = 0.1
+else:
+    cpu_threshold_low = 0.1
+    cpu_threshold_high = 0.3
 
 while True:
     scale_up = []
@@ -77,18 +87,18 @@ while True:
     dont_scale_down = False
     # memory
     stat = memstat()
-    if stat["Used"] > 0.8 * stat["MemTotal"]:
-        scale_up.append("memory usage > 80%")
-    elif stat["Used"] < 0.5 * stat["MemTotal"]:
-        scale_down.append("memory usage < 50%")
+    if stat["Used"] > 0.5 * stat["MemTotal"]:
+        scale_up.append("memory usage %f%% > 50%%" % (100 * stat["Used"] / stat["MemTotal"]))
+    elif stat["Used"] < 0.2 * stat["MemTotal"]:
+        scale_down.append("memory usage %f%% < 20%%" % (100 * stat["Used"] / stat["MemTotal"]))
     else:
         dont_scale_down = True
     # CPU
     stat = cpuusage(last_cpuusage)
-    if stat[0] > 0.8 * stat[1]:
-        scale_up.append("cpu usage > 80%")
-    elif stat[0] < 0.5 * stat[1]:
-        scale_down.append("cpu usage < 50%")
+    if stat[0] > cpu_threshold_high * stat[1]:
+        scale_up.append("cpu usage %f%% > %f%%" % (100 * stat[0] / stat[1], 100 * cpu_threshold_high))
+    elif stat[0] < cpu_threshold_low * stat[1]:
+        scale_down.append("cpu usage %f%% < %f%%" % (100 * stat[0] / stat[1], 100 * cpu_threshold_low))
     else:
         dont_scale_down = True
     # scaling solution
