@@ -17,8 +17,8 @@ def store_error(target, error):
 def random_string(length):
     return ''.join([random.choice(alphabet) for i in range(0, length)])
     
-def create_post(target, title, body):
-    content = "title=%s&body=%s" % (urlencode(title), urlencode(body))
+def create_post(target, title, body, tags):
+    content = "title=%s&body=%s&tags=%s" % (urlencode(title), urlencode(body), urlencode(tags))
     if len(content) > 1024 * 1024:
         store_error(target, "request_too_large")
         return
@@ -34,6 +34,22 @@ def create_post(target, title, body):
             if res.status_code != 302:
                 store_error(target, "create_post: %d" % res.status_code)
             print "post len=%d, time=%f" % (len(content), time.time() - start)
+        finally:
+            cnn.close()
+    except IOError as e:
+        store_error(target, e)
+
+def fetch_cloud(target):
+    cnn = HTTPConnection()
+    try:
+        cnn.connect((target["host"], 80))
+        try:
+            start = time.time()
+            req = cnn.get("/tags")
+            res = cnn.perform(req)
+            if res.status_code != 200:
+                store_error(target, "fetch_cloud: %d" % res.status_code)
+            print "cloud time=%f" % (time.time() - start)
         finally:
             cnn.close()
     except IOError as e:
@@ -78,4 +94,4 @@ def comment_post(target, id, body):
         store_error(target, e)
 
 def create_post_with_large_title(target):
-    create_post(target, "Title", random_string(950000))
+    create_post(target, "Title", random_string(950000), "")

@@ -3,6 +3,7 @@
 from concurrence import *
 from jb.attack import *
 import sys
+import os
 
 def create_posts(target, title, content, quantity):
     for i in range(0, quantity):
@@ -34,6 +35,6 @@ def main():
             Tasklet.join(tasklet)
         print "Errors: %s" % target["errors"]
     finally:
-        quit()
+        os._exit(0)
 
 dispatch(main)
