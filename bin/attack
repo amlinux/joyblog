@@ -8,6 +8,14 @@ def create_posts(target, title, content, quantity):
     for i in range(0, quantity):
         create_post(target, title, content)
 
+def fetch_posts(target, id, quantity):
+    for i in range(0, quantity):
+        fetch_post(target, id)
+
+def comment_posts(target, id, content, quantity):
+    for i in range(0, quantity):
+        comment_post(target, id, content)
+
 def main():
     try:
         target = {
@@ -16,11 +24,12 @@ def main():
         }
         #content = random_string(950000)
         #title = random_string(950000)
-        title = " ".join([random_string(95) for i in range(0, 10000)])
-        #content = " ".join([random_string(950) for i in range(0, 100)])
+        #title = " ".join([random_string(95) for i in range(0, 10000)])
+        content = " ".join([random_string(950) for i in range(0, 100)])
         tasklets = []
         for i in range(0, 10):
-            tasklets.append(Tasklet.new(create_posts)(target, title, "Content %d", 10))
+            tasklets.append(Tasklet.new(comment_posts)(target, "f4f504dcd2df41a893c1729acb630e03", content, 100))
+            #tasklets.append(Tasklet.new(fetch_posts)(target, "f4f504dcd2df41a893c1729acb630e03", 10))
         for tasklet in tasklets:
             Tasklet.join(tasklet)
         print "Errors: %s" % target["errors"]
