@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from mg import *
 from itertools import *
 from concurrence import Tasklet
@@ -10,23 +12,20 @@ import time
 
 max_word_len = 30
 max_tag_len = 30
-max_inline_chunk_len = 10000
+max_inline_chunk_len = 200
 
 posts_per_page = 10
 
 alphabet = "abcdefghijklmnopqrstuvwxyz"
-storage_host = "storage"
 
 re_split_tags = re.compile(r'\s*(,\s*)+')
 re_url_comments = re.compile(r'^([a-f0-9]+)/comments$')
 re_extract_uuid = re.compile(r'^.*//([a-f0-9]+)$')
 re_wildcard = re.compile(r'^(.*)(.)\*$')
-delimiters = r'\s\.,\-\!\&\(\)\'"\:;\<\>\/\?\`\|'
+delimiters = r'\s\.,\-\!\&\(\)\'"\:;\<\>\/\?\`\|»\—«'
 re_word_symbol = re.compile(r'[^%s]' % delimiters)
 re_not_word_symbol = re.compile(r'[%s]' % delimiters)
 re_text_chunks = re.compile(r'.{1000,}?\S*|.+', re.DOTALL)
-re_split_chunks = re.compile('(###INCLUDE:.+?###)')
-re_include = re.compile(r'###INCLUDE:(.*):(\d+)###')
 
 # blog post
 
@@ -97,37 +96,13 @@ def word_extractor(text):
             m = re_not_word_symbol.search(text, start)
             if m:
                 end = m.end()
-                yield text[start:end-1].lower()
+                if end - start > 3:
+                    yield text[start:end-1].lower()
                 text = text[end:]
             else:
-                yield text.lower()
+                if len(text) >= 3:
+                    yield text.lower()
                 break
-
-# deferred chunks
-
-class DownloadChunk(object):
-    def __init__(self, url, len):
-        self.url = url
-        self.len = len
-
-    def __len__(self):
-        return self.len
-
-    def __str__(self):
-        cnn = HTTPConnection()
-        try:
-            cnn.connect((storage_host, 80))
-            try:
-                req = cnn.get(str(self.url))
-                res = cnn.perform(req)
-                if res.status_code == 200:
-                    return res.body
-            finally:
-                cnn.close()
-        except IOError:
-            pass
-        # degradation
-        return ""
 
 # main module
 
@@ -136,6 +111,7 @@ class Blog(Module):
         Module.register(self)
         self.rdep(["mg.core.cass_struct.CommonCassandraStruct", "mg.core.web.Web", "mg.core.cass_maintenance.CassandraMaintenance"])
         self.rhook("core.template_path", self.template_path)
+        self.rhook("web.global_html", self.web_global_html)
         self.rhook("ext-index.index", self.ext_posts)
         self.rhook("ext-posts.index", self.ext_posts)
         self.rhook("ext-posts.page", self.ext_posts_page)
@@ -147,6 +123,9 @@ class Blog(Module):
 
     def template_path(self, paths):
         paths.append(jb.__path__[0] + "/templates")
+
+    def web_global_html(self):
+        return "joyblog/global.html"
 
     def ext_posts(self):
         return self.posts(1)
@@ -192,7 +171,7 @@ class Blog(Module):
                 tag_short = tag
                 if len(tag_short) > max_tag_len:
                     tag_short = tag_short[0:max_tag_len]
-                mutations_tags.append(Mutation(ColumnOrSuperColumn(Column(name=tag_short.encode("utf-8"), value=tag.encode("utf-8"), clock=clock))))
+                mutations_tags.append(Mutation(ColumnOrSuperColumn(Column(name=tag_short.encode("utf-8"), value=self.upload_if_large(cgi.escape(tag)), clock=clock))))
                 mutations_tagged_posts.append(Mutation(ColumnOrSuperColumn(Column(name="%s//%s" % (tag_short.encode("utf-8"), post.uuid), value="1", clock=clock))))
             app_tag = self.app().tag
             mutations = {}
@@ -248,26 +227,7 @@ class Blog(Module):
                     pages_list.append({"entry": {"text": "..."}})
                 last_show = show
             vars["pages"] = pages_list
-        return self.chunked_template("joyblog/posts.html", vars, posts=posts)
-
-    def chunked_template(self, template, vars, posts=None):
-        req = self.req()
-        vars["content"] = self.call("web.parse_template", template, vars)
-        content = self.call("web.parse_template", "joyblog/global.html", vars)
-        # creating chunked response
-        chunks = re_split_chunks.split(content)
-        response = []
-        for chunk in chunks:
-            m = re_include.match(chunk)
-            if m:
-                url, length = m.group(1, 2)
-                length = int(length)
-                response.append(DownloadChunk(url, length))
-            else:
-                response.append(chunk)
-        req.headers.append(("Content-type", "text/html; charset=utf-8"))
-        req.start_response("200 OK", req.headers)
-        return response
+        return self.call("web.response_template", "joyblog/posts.html", vars)
 
     def update_fulltext(self, post_uuid, words):
         stored = set()
@@ -353,7 +313,7 @@ class Blog(Module):
         comments = []
         self.render_comments(comments, render_comments)
         vars["comments"] = comments
-        return self.chunked_template("joyblog/post.html", vars)
+        return self.call("web.response_template", "joyblog/post.html", vars)
 
     def render_comments(self, result, comments):
         for comment in comments:
@@ -366,11 +326,11 @@ class Blog(Module):
     def ext_tags(self):
         app_tag = self.app().tag
         tags = self.app().db.get_slice("%s-BlogTags" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange("", "")), ConsistencyLevel.QUORUM)
-        tags = [cgi.escape(tag.column.value) for tag in tags]
+        tags = [tag.column.value for tag in tags]
         vars = {
             "tags": tags
         }
-        return self.chunked_template("joyblog/tags.html", vars)
+        return self.call("web.response_template", "joyblog/tags.html", vars)
 
     def ext_tag(self):
         req = self.req()
@@ -393,7 +353,7 @@ class Blog(Module):
             "tag": cgi.escape(tag),
             "posts": render_posts.data(),
         }
-        return self.chunked_template("joyblog/tag.html", vars)
+        return self.call("web.response_template", "joyblog/tag.html", vars)
 
     def ext_search(self):
         req = self.req()
@@ -426,29 +386,33 @@ class Blog(Module):
             "query": cgi.escape(query),
             "posts": render_posts.data(),
         }
-        return self.chunked_template("joyblog/search.html", vars)
+        return self.call("web.response_template", "joyblog/search.html", vars)
 
     def upload_if_large(self, data):
         if type(data) == unicode:
             data = data.encode("utf-8")
         if len(data) < max_inline_chunk_len:
             return data
-        url = str("/%s%s/%s" % (random.choice(alphabet), random.choice(alphabet), uuid4().hex))
+        req = self.req()
+        url = str("/storage/%s%s/%s" % (random.choice(alphabet), random.choice(alphabet), uuid4().hex))
         cnn = HTTPConnection()
+        print "host: %s" % req.host()
         try:
-            cnn.connect((storage_host, 80))
+            cnn.connect((req.host(), 80))
             try:
                 request = HTTPRequest()
                 request.method = "PUT"
                 request.path = url
-                request.host = storage_host
+                request.host = req.host()
                 request.body = data
                 request.add_header("Content-type", "application/octet-stream")
                 request.add_header("Content-length", len(data))
                 response = cnn.perform(request)
                 if response.status_code != 201:
-                    raise RuntimeError("Error storing object: %s" % response.status)
-                return "###INCLUDE:%s:%d###" % (url, len(data))
+                    self.error("Error storing object: %s", response.status)
+                    # degradation
+                    return ""
+                return '<!--# include file="%s" -->' % url
             finally:
                 cnn.close()
         except IOError as e:
