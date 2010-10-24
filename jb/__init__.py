@@ -136,20 +136,17 @@ class Blog(Module):
     def posts(self, page):
         req = self.req()
         if req.environ.get("REQUEST_METHOD") == "POST":
-            self.debug("parsing request...")
             title = req.param("title").strip()
             body = req.param("body").strip()
             tags = req.param("tags").strip()
             if title == "":
                 title = "Untitled"
-            self.debug("extracting tags...")
             raw_tags = re_split_tags.split(tags) if len(tags) else []
             tags = set()
             for i in range(0, len(raw_tags)):
                 if i % 2 == 0:
                     tag = raw_tags[i]
                     tags.add(raw_tags[i].lower())
-            self.debug("creating data objects...")
             post = self.obj(BlogPost)
             post_content = self.obj(BlogPostContent, post.uuid, data={})
             post.set("created", self.now())
@@ -162,24 +159,22 @@ class Blog(Module):
                 post.set("title", title)
                 post_content.set("body", body)
                 post.set("tags", list(tags))
-            self.debug("storing tags...")
             # updating tags index
+            mutations = {}
             mutations_tags = []
-            mutations_tagged_posts = []
             clock = Clock(time.time() * 1000)
+            app_tag = self.app().tag
             for tag in tags:
                 tag_short = tag
                 if len(tag_short) > max_tag_len:
                     tag_short = tag_short[0:max_tag_len]
-                mutations_tags.append(Mutation(ColumnOrSuperColumn(Column(name=tag_short.encode("utf-8"), value=self.upload_if_large(cgi.escape(tag)), clock=clock))))
-                mutations_tagged_posts.append(Mutation(ColumnOrSuperColumn(Column(name="%s//%s" % (tag_short.encode("utf-8"), post.uuid), value="1", clock=clock))))
-            app_tag = self.app().tag
-            mutations = {}
+                tag_short = tag_short.encode("utf-8")
+                mutations_tags.append(Mutation(ColumnOrSuperColumn(Column(name=tag_short, value=self.upload_if_large(cgi.escape(tag)), clock=clock))))
+                mutations["%s-BlogTaggedPosts-%s" % (app_tag, tag_short)] = {"Objects": [Mutation(ColumnOrSuperColumn(Column(name=post.uuid, value="1", clock=clock)))]}
             if len(mutations_tags):
                 mutations["%s-BlogTags" % app_tag] = {"Objects": mutations_tags}
-                mutations["%s-BlogTaggedPosts" % app_tag] = {"Objects": mutations_tagged_posts}
-            self.app().db.batch_mutate(mutations, ConsistencyLevel.QUORUM)
-            self.debug("calculating words...")
+            if len(mutations):
+                self.app().db.batch_mutate(mutations, ConsistencyLevel.QUORUM)
             words = list(chain(word_extractor(title), word_extractor(body)))
             word_stat = {}
             for word in words:
@@ -191,10 +186,8 @@ class Blog(Module):
             word_stat.sort(key=itemgetter(0))
             word_stat.sort(key=itemgetter(1), reverse=True)
             post_content.set("words_html", self.upload_if_large(''.join(["<tr><td>%s</td><td>%s</td></tr>" % (ent[0], ent[1]) for ent in word_stat])))
-            self.debug("storing post...")
             post.store()
             post_content.store()
-            self.debug("creating fulltext index...")
             # deferring fulltext index
             self.update_fulltext(post.uuid, words)
             self.call("web.redirect", "/posts/%s" % post.uuid)
@@ -205,8 +198,8 @@ class Blog(Module):
             pages = 1
         if page < 1 or page > pages:
             self.call("web.not_found")
-        del posts[0:(page - 1) * posts_per_page]
         del posts[page * posts_per_page:]
+        del posts[0:(page - 1) * posts_per_page]
         posts.load()
         vars = {
             "posts": posts.data()
@@ -325,7 +318,7 @@ class Blog(Module):
 
     def ext_tags(self):
         app_tag = self.app().tag
-        tags = self.app().db.get_slice("%s-BlogTags" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange("", "")), ConsistencyLevel.QUORUM)
+        tags = self.app().db.get_slice("%s-BlogTags" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange("", "", count=10000000)), ConsistencyLevel.QUORUM)
         tags = [tag.column.value for tag in tags]
         vars = {
             "tags": tags
@@ -340,7 +333,7 @@ class Blog(Module):
             tag_utf8 = tag_utf8[0:max_tag_len]
         tag_utf8 = tag_utf8.encode("utf-8")
         app_tag = self.app().tag
-        posts = self.app().db.get_slice("%s-BlogTaggedPosts" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange(tag_utf8 + "//", tag_utf8 + "/=")), ConsistencyLevel.QUORUM)
+        posts = self.app().db.get_slice("%s-BlogTaggedPosts-%s" % (app_tag, tag_utf8), ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange("", "", count=10000000)), ConsistencyLevel.QUORUM)
         render_posts = []
         for post in posts:
             m = re_extract_uuid.match(post.column.name)
@@ -373,7 +366,7 @@ class Blog(Module):
             start = (query_search + "//").encode("utf-8")
             finish = (query_search + "/=").encode("utf-8")
         app_tag = self.app().tag
-        posts = self.app().db.get_slice("%s-BlogSearch" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange(start, finish)), ConsistencyLevel.QUORUM)
+        posts = self.app().db.get_slice("%s-BlogSearch" % app_tag, ColumnParent("Objects"), SlicePredicate(slice_range=SliceRange(start, finish, count=10000000)), ConsistencyLevel.QUORUM)
         render_posts = set()
         for post in posts:
             m = re_extract_uuid.match(post.column.name)
@@ -396,7 +389,6 @@ class Blog(Module):
         req = self.req()
         url = str("/storage/%s%s/%s" % (random.choice(alphabet), random.choice(alphabet), uuid4().hex))
         cnn = HTTPConnection()
-        print "host: %s" % req.host()
         try:
             cnn.connect((req.host(), 80))
             try:
