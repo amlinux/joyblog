@@ -101,6 +101,7 @@ def word_extractor(text):
                     yield text[start:end-1].lower()
                 text = text[end:]
             else:
+                text = text[start:]
                 if len(text) >= 3:
                     yield text.lower()
                 break
