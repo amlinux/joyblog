@@ -17,7 +17,7 @@ deploy:
 	rm -rf depl/mg/mg/admin depl/mg/mg/constructor depl/mg/mg/data depl/mg/mg/mmo depl/mg/mg/socio `ls -d depl/mg/mg/templates/* | grep -v director` depl/mg/mg/test
 	find depl \( -name '*.py' -or -name '.hg*' -or -name '*.po' -or -name '*.pot' \) -exec rm -rf {} \;
 	rsync -r depl/* joyblog:/home/
-	for server in Backend1 Backend2 DB1 DB2 DDoS ; do ssh joyblog "cd /home;rsync -r --exclude=storage mg joyblog $$server:/home/" ; done
+	for server in Backend1 Backend2 DB1 DB2 ; do ssh joyblog "cd /home;rsync -r --exclude=storage mg joyblog $$server:/home/" ; done
 	for server in Backend1 Backend2 ; do ssh joyblog "ssh $$server 'killall mg_worker'" ; done
 
 cleanup:

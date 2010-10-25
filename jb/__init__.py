@@ -23,7 +23,7 @@ re_split_tags = re.compile(r'\s*(,\s*)+')
 re_post_command = re.compile(r'^([a-f0-9]+)/(comments|words)$')
 re_extract_uuid = re.compile(r'^.*//([a-f0-9]+)$')
 re_wildcard = re.compile(r'^(.*)(.)\*$')
-delimiters = r'\s\.,\-\!\&\(\)\'"\:;\<\>\/\?\`\|»\—«'
+delimiters = r'\s\.,\-\!\&\(\)\'"\:;\<\>\/\?\`\|»\—«\r\n'
 re_word_symbol = re.compile(r'[^%s]' % delimiters)
 re_not_word_symbol = re.compile(r'[%s]' % delimiters)
 re_text_chunks = re.compile(r'.{1000,}?\S*|.+', re.DOTALL)
@@ -198,7 +198,10 @@ class Blog(Module):
                 self.call("web.cache_invalidate", "/tags/%s" % tag)
             self.call("web.redirect", "/posts/%s" % post.uuid)
         # loading posts
-        posts = self.objlist(BlogPostList, query_index="created", query_reversed=True)
+        if page < 1:
+            self.call("web.not_found")
+        limit = page * posts_per_page
+        posts = self.objlist(BlogPostList, query_index="created", query_reversed=True, query_limit=limit+1)
         pages = (len(posts) - 1) / posts_per_page + 1
         if pages < 1:
             pages = 1
@@ -219,7 +222,7 @@ class Blog(Module):
                 if show:
                     if len(pages_list):
                         pages_list.append({"delim": True})
-                    pages_list.append({"entry": {"text": i, "a": None if i == page else {"href": "/posts/page/%d" % i}}})
+                    pages_list.append({"entry": {"text": i if i < pages or page == pages else ">>", "a": None if i == page else {"href": "/posts/page/%d" % i}}})
                 elif last_show:
                     if len(pages_list):
                         pages_list.append({"delim": True})

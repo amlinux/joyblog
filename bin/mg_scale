@@ -78,8 +78,8 @@ if re.match("DB", sys.argv[1]):
     cpu_threshold_low = 0.05
     cpu_threshold_high = 0.1
 else:
-    cpu_threshold_low = 0.1
-    cpu_threshold_high = 0.3
+    cpu_threshold_low = 0.05
+    cpu_threshold_high = 0.1
 
 while True:
     scale_up = []
